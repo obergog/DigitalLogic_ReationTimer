@@ -26,7 +26,7 @@ module Project_2( input [1:0]KEY,
 	parameter ready_HEX5 = ~(8'b00000000);	//blank space
 	parameter ready_all = {ready_HEX5, ready_HEX4, ready_HEX3, ready_HEX2, ready_HEX1, ready_HEX0};
 	
-	//constants to be display "delay" during the delay state
+	//constants to be display "delay" during the delay state (not currently in use, "go buffs" is displayed instead)
 	parameter delay_HEX0 = ~(8'b00111011);	//'y'
 	parameter delay_HEX1 = ~(8'b01110111);	//'a'
 	parameter delay_HEX2 = ~(8'b00110000);	//'l'
@@ -46,8 +46,9 @@ module Project_2( input [1:0]KEY,
 	defparam clock_division2.n = 10000000;
 	
 	//find a random number between 0 and 255
-	wire [7:0]delay;
-	LFSR random(clock_5, delay[7:0]);
+	wire [8:0]delay;
+	reg [8:0]current_delay;
+	LFSR random(clock_1k, delay[7:0]);
 		
 	//create wires to hold the seven segment output of the timer
 	wire [7:0]react_HEX0;
@@ -56,19 +57,59 @@ module Project_2( input [1:0]KEY,
 	wire [7:0]react_HEX3;
 	wire [47:0]react_all;
 	assign react_all[47:0] = {8'b11111111, 8'b11111111, react_HEX3[7:0], react_HEX2[7:0], react_HEX1[7:0], react_HEX0[7:0]};
+	assign react_HEX0[7] = 1;
+	assign react_HEX1[7] = 1;
+	assign react_HEX2[7] = 1;
+	assign react_HEX3[7] = 0;
 	//use the BCD_counter to time the reaction of the user
 	wire go;
 	wire reset;
 	assign go = state[1] & ~state[0];
 	assign reset = ~state[1] & ~state[0];
-	BCD_counter reaction_count(clock_1k, go, reset, react_HEX0[7:0], react_HEX1[7:0], react_HEX2[7:0], react_HEX3[7:0]);
+	wire [13:0]reaction_count;
+	BCD_counter reaction_counter(clock_1k, go, reset, reaction_count[13:0]);
+	BCD_decoder reaction_HEX_block(reaction_count[13:0], react_HEX0[6:0], react_HEX1[6:0], react_HEX2[6:0], react_HEX3[6:0]);
 
+	
+	//create a register to hold the high score
+	wire [7:0]high_HEX0;
+	wire [7:0]high_HEX1;
+	wire [7:0]high_HEX2;
+	wire [7:0]high_HEX3;
+	assign high_HEX0[7] = 1;
+	assign high_HEX1[7] = 1;
+	assign high_HEX2[7] = 1;
+	assign high_HEX3[7] = 0;
+	wire [47:0]high_all;
+	assign high_all[47:0] = {8'b11111111, 8'b11111111, high_HEX3[7:0], high_HEX2[7:0], high_HEX1[7:0], high_HEX0[7:0]};
+	reg [13:0]high_score_count;
+	initial high_score_count[13:0] = 14'b11111111111111;
+	BCD_decoder high_score_HEX_block(high_score_count[13:0], high_HEX0[6:0], high_HEX1[6:0], high_HEX2[6:0], high_HEX3[6:0]);
+	//compare current reaction time to the high score and set the high score to the lower of the two
+	always@(reaction_count)
+	begin
+		if((state == finish_state) && (reaction_count < high_score_count))
+		begin
+			high_score_count[13:0] = reaction_count[13:0];
+		end
+	end
+	
 	//create seperate button states that are used to cycle through the top level states
 	reg [1:0]button_state;
-	always@(negedge KEY[0])
+	always@(negedge KEY[0], negedge KEY[1])
 	begin
-		button_state = (button_state + 1) % 3;
+		//use button 1 as an asynchronous reset
+		if(~KEY[1])
+		begin
+			button_state = 2'b00;
+		end
+		//use button 0 to cycle through the states
+		else
+		begin
+			button_state = (button_state + 1) % 3;
+		end
 	end
+	
 	//use the 1KHz clock to check the button states and enter the apporpriate top level states
 	integer delay_count;
 	reg delay_flag;
@@ -82,7 +123,7 @@ module Project_2( input [1:0]KEY,
 			2'b01:
 			begin
 				//wait the random amount of time (0-255) plus 500 miliseconds
-				if((delay_count < (delay + 500)) && (delay_flag == 0))
+				if((delay_count < ((delay << 1) + 500)) && (delay_flag == 0))
 				begin
 					state = delay_state;
 					delay_count = delay_count + 1;
@@ -110,9 +151,25 @@ module Project_2( input [1:0]KEY,
 			assign LED[i] = state[1];
 		end
 	endgenerate
+
+	//scroll "go buffs" accross the displays when the test is running
+	wire [7:0]buff_HEX0;
+	wire [7:0]buff_HEX1;
+	wire [7:0]buff_HEX2;
+	wire [7:0]buff_HEX3;
+	wire [7:0]buff_HEX4;
+	wire [7:0]buff_HEX5;
+	wire [47:0]buff_all;
+	assign buff_all[47:0] = {buff_HEX5[7:0],buff_HEX4[7:0],buff_HEX3[7:0],buff_HEX2[7:0],buff_HEX1[7:0],buff_HEX0[7:0]};
+	go_buffs buff_block(clock_5 & state[1], buff_HEX0[7:0], buff_HEX1[7:0], buff_HEX2[7:0], buff_HEX3[7:0], buff_HEX4[7:0], buff_HEX5[7:0]);
 	
+	wire [47:0]reaction_total;
 	//use a very large multiplexor to change the output of the seven segment displays based on the state
-	MUX HEX_MUX({react_all[47:0],react_all[47:0],delay_all[47:0],ready_all[47:0]}, state[1:0],
+	MUX react_HEX_MUX({react_all[47:0],buff_all[47:0],buff_all[47:0],ready_all[47:0]}, state[1:0], reaction_total[47:0]);
+	defparam react_HEX_MUX.n = 48;
+	
+	//use a second multiplexor to switch between the normal operation mode and the high score mode
+	MUX final_HEX_MUX({reaction_total[47:0], high_all[47:0], reaction_total[47:0], reaction_total[47:0]}, {SW[9:8] & ~state[1:0]},
 		{HEXOUT_5[7:0], HEXOUT_4[7:0], HEXOUT_3[7:0], HEXOUT_2[7:0], HEXOUT_1[7:0], HEXOUT_0[7:0]});
-	defparam HEX_MUX.n = 48;
+	defparam final_HEX_MUX.n = 48;
 endmodule
